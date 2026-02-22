@@ -188,7 +188,7 @@ def chunk_article(article: dict, strategy: str = "recursive", chunk_size: int = 
     # as a title + body about features = the chunk needs both.
     title = article.get("title", "")
     if title:
-        full_text = f"{title}\n\n{content}"
+        full_text = f"{title}. {content}"
     else:
         full_text = content
     
