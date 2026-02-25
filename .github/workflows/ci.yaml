@@ -28,4 +28,41 @@ jobs:
           pip install pytest
 
       - name: Run tests
-        run: pytest tests/ -v
+        run: pytest tests/ -v -m "not ragas"
+
+  ragas-eval:
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install feedparser requests python-dotenv
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install sentence-transformers chromadb
+          pip install openai pyyaml
+          pip install ragas langchain-google-genai datasets
+
+      - name: Ingest and embed data
+        run: |
+          python run_ingest.py
+          python run_chunk.py
+          python run_embed.py
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+
+      - name: Run RAGAS evaluation
+        run: pytest tests/test_ragas_eval.py -v -m ragas
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}

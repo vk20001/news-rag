@@ -42,8 +42,8 @@ foundation of semantic search.
 
 import json
 import os
-import chromadb
 from sentence_transformers import SentenceTransformer
+from src.db import get_chroma_collection
 
 
 # ──────────────────────────────────────────────
@@ -66,37 +66,7 @@ def load_embedding_model(model_name: str = "all-MiniLM-L6-v2") -> SentenceTransf
     return model
 
 
-# ──────────────────────────────────────────────
-# ChromaDB Setup
-# ──────────────────────────────────────────────
 
-def get_chroma_collection(
-    persist_dir: str = "data/vectorstore",
-    collection_name: str = "tech_news",
-) -> chromadb.Collection:
-    """
-    Create or connect to a ChromaDB collection.
-    
-    persist_dir: where ChromaDB saves data on disk.
-    ChromaDB runs IN-PROCESS — no separate server needed.
-    It's just a Python object that reads/writes to this directory.
-    
-    A "collection" in ChromaDB = a table in SQL.
-    One collection holds all your chunk vectors.
-    """
-    os.makedirs(persist_dir, exist_ok=True)
-    
-    client = chromadb.PersistentClient(path=persist_dir)
-    
-    # get_or_create: if collection exists, connect to it.
-    # If not, create new one. Safe to call multiple times.
-    collection = client.get_or_create_collection(
-        name=collection_name,
-        metadata={"hnsw:space": "cosine"},  # use cosine similarity for search
-    )
-    
-    print(f"ChromaDB collection '{collection_name}': {collection.count()} existing vectors")
-    return collection
 
 
 # ──────────────────────────────────────────────

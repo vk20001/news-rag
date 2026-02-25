@@ -1,0 +1,48 @@
+version: "3.9"
+
+services:
+  chromadb:
+    image: chromadb/chroma:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      - ANONYMIZED_TELEMETRY=False
+
+  app:
+    build: .
+    ports:
+      - "8501:8501"
+    depends_on:
+      - chromadb
+    environment:
+      - CHROMA_MODE=http
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+    volumes:
+      - ./data:/app/data
+    command: streamlit run app.py --server.address=0.0.0.0 --server.port=8501
+
+  ingest:
+    build: .
+    depends_on:
+      - chromadb
+    environment:
+      - CHROMA_MODE=http
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+    volumes:
+      - ./data:/app/data
+    command: >
+      sh -c "python run_ingest.py &&
+             python run_chunk.py &&
+             python run_embed.py"
+    profiles: ["ingest"]
+
+volumes:
+  chroma_data:

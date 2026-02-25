@@ -29,7 +29,7 @@ if even the best chunk has high distance, the system probably
 doesn't have good context to answer the question.
 """
 
-import chromadb
+
 from sentence_transformers import SentenceTransformer
 
 
@@ -56,8 +56,8 @@ class Retriever:
         print("Loading retriever...")
         self.model = SentenceTransformer(model_name)
         
-        client = chromadb.PersistentClient(path=persist_dir)
-        self.collection = client.get_collection(collection_name)
+        from src.db import get_chroma_collection
+        self.collection = get_chroma_collection(persist_dir, collection_name)
         
         print(f"Retriever ready. {self.collection.count()} vectors in store.")
     
