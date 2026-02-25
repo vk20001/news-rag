@@ -61,7 +61,7 @@ def test_ragas_metrics():
 
     results = evaluate(
         dataset,
-        metrics=[Faithfulness(), AnswerRelevancy()],
+        metrics=[Faithfulness(llm=llm), AnswerRelevancy(llm=llm, embeddings=embeddings)],
         llm=llm,
         embeddings=embeddings,
     )
