@@ -20,7 +20,7 @@ pytestmark = pytest.mark.ragas
 def test_ragas_metrics():
     from datasets import Dataset
     from ragas import evaluate
-    from ragas.metrics.collections import faithfulness, answer_relevancy
+    from ragas.metrics.collections import Faithfulness, AnswerRelevancy
     from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
     from src.retrieval.retriever import Retriever
     from src.generation.generator import generate_answer
@@ -61,7 +61,7 @@ def test_ragas_metrics():
 
     results = evaluate(
         dataset,
-        metrics=[faithfulness, answer_relevancy],
+        metrics=[Faithfulness(), AnswerRelevancy()],
         llm=llm,
         embeddings=embeddings,
     )
