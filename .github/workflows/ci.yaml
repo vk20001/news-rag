@@ -25,6 +25,7 @@ jobs:
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install sentence-transformers chromadb
           pip install openai pyyaml
+          pip install ragas langchain-google-genai datasets
           pip install pytest
 
       - name: Run tests
