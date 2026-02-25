@@ -1,10 +1,9 @@
 """
 RAGAS Evaluation Suite
 ======================
-Measures RAG pipeline quality using 3 metrics:
+Measures RAG pipeline quality using 2 metrics:
 - Faithfulness: does the answer contain only claims supported by context?
 - Answer Relevancy: does the answer address the question?
-- Context Precision: are the retrieved chunks actually useful?
 
 Run locally:
     pytest tests/test_ragas_eval.py -v -m ragas
@@ -19,15 +18,13 @@ pytestmark = pytest.mark.ragas
 
 
 def test_ragas_metrics():
-    # Import here so normal pytest runs don't load these heavy deps
     from datasets import Dataset
     from ragas import evaluate
-    from ragas.metrics import faithfulness, answer_relevancy, context_precision
+    from ragas.metrics.collections import faithfulness, answer_relevancy
     from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
     from src.retrieval.retriever import Retriever
     from src.generation.generator import generate_answer
 
-    # Load eval questions
     dataset_path = os.path.join(os.path.dirname(__file__), "eval_dataset.json")
     with open(dataset_path) as f:
         eval_questions = json.load(f)
@@ -64,7 +61,7 @@ def test_ragas_metrics():
 
     results = evaluate(
         dataset,
-        metrics=[faithfulness, answer_relevancy, context_precision],
+        metrics=[faithfulness, answer_relevancy],
         llm=llm,
         embeddings=embeddings,
     )
@@ -72,7 +69,6 @@ def test_ragas_metrics():
     print(f"\nRAGAS Results:")
     print(f"  Faithfulness:      {results['faithfulness']:.3f}")
     print(f"  Answer Relevancy:  {results['answer_relevancy']:.3f}")
-    print(f"  Context Precision: {results['context_precision']:.3f}")
 
     assert results["faithfulness"] >= 0.7, \
         f"Faithfulness too low: {results['faithfulness']:.3f}"
