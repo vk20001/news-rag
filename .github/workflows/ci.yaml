@@ -52,6 +52,8 @@ jobs:
           pip install sentence-transformers chromadb
           pip install openai pyyaml
           pip install ragas langchain-google-genai datasets
+          pip install pytest
+
 
       - name: Ingest and embed data
         run: |
