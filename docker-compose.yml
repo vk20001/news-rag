@@ -1,4 +1,8 @@
-version: "3.9"
+# ARCHITECTURE: Single vector store, always.
+# Both local WSL scripts and Docker services talk to the same ChromaDB container.
+# Local WSL: CHROMA_HOST=localhost (port-mapped to 8000)
+# Docker services: CHROMA_HOST=chromadb (Docker internal DNS)
+# Set CHROMA_MODE=http in .env so local scripts also use the container.
 
 services:
   chromadb:
@@ -6,7 +10,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - chroma_data:/chroma/chroma
+      - chroma_data:/data
     environment:
       - ANONYMIZED_TELEMETRY=False
 
@@ -24,7 +28,9 @@ services:
       - GROQ_API_KEY=${GROQ_API_KEY}
     volumes:
       - ./data:/app/data
-    command: streamlit run app.py --server.address=0.0.0.0 --server.port=8501
+    command: >
+      sh -c "sleep 15 && streamlit run app.py --server.address=0.0.0.0 --server.port=8501"
+    restart: unless-stopped
 
   ingest:
     build: .
@@ -39,10 +45,12 @@ services:
     volumes:
       - ./data:/app/data
     command: >
-      sh -c "python run_ingest.py &&
+      sh -c "sleep 15 &&
+             python run_ingest.py &&
              python run_chunk.py &&
              python run_embed.py"
     profiles: ["ingest"]
 
 volumes:
   chroma_data:
+    driver: local

@@ -1,7 +1,11 @@
 """
 RSS Feed Sources Configuration
-- Removed Hacker News: returns links/metadata, not article content
-- Added Wired: good long-form tech content for chunking practice
+
+Changes from v1:
+- Removed Wired: blocks feedparser, returns 0 articles consistently
+- Replaced TechCrunch full feed with category-specific feeds (more articles)
+- Added VentureBeat AI, ZDNet, The Next Web, Engadget
+- Added Reuters Technology for broader coverage
 """
 
 TECH_NEWS_FEEDS = [
@@ -9,6 +13,11 @@ TECH_NEWS_FEEDS = [
         "name": "TechCrunch",
         "url": "https://techcrunch.com/feed/",
         "category": "tech_general",
+    },
+    {
+        "name": "TechCrunch AI",
+        "url": "https://techcrunch.com/category/artificial-intelligence/feed/",
+        "category": "ai",
     },
     {
         "name": "Ars Technica",
@@ -26,8 +35,28 @@ TECH_NEWS_FEEDS = [
         "category": "tech_research",
     },
     {
-        "name": "Wired",
-        "url": "https://www.wired.com/feed/rss",
-        "category": "tech_deep",
+        "name": "VentureBeat",
+        "url": "https://venturebeat.com/feed/",
+        "category": "tech_general",
+    },
+    {
+        "name": "VentureBeat AI",
+        "url": "https://venturebeat.com/category/ai/feed/",
+        "category": "ai",
+    },
+    {
+        "name": "The Next Web",
+        "url": "https://thenextweb.com/feed/",
+        "category": "tech_general",
+    },
+    {
+        "name": "ZDNet",
+        "url": "https://www.zdnet.com/news/rss.xml",
+        "category": "tech_general",
+    },
+    {
+        "name": "Engadget",
+        "url": "https://www.engadget.com/rss.xml",
+        "category": "tech_general",
     },
 ]

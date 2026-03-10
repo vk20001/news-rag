@@ -1,27 +1,23 @@
 """
-Streamlit UI for RAG Quality Pipeline
-======================================
-
-Two pages:
-1. Query — ask questions, see answers with faithfulness scores
-2. Dashboard — monitor system performance over time
+Tech News Assistant — Conversational RAG
 """
 
 import streamlit as st
 import time
-import pandas as pd
 from src.retrieval.retriever import Retriever
 from src.generation.generator import generate_answer
+from src.generation.query_rewriter import rewrite_query
 from src.evaluation.hallucination_gate import HallucinationGate
 from src.monitoring.metrics_logger import MetricsLogger
+from src.routing.query_router import route_query
 
 
-# ──────────────────────────────────────────────
-# Load models ONCE — cached in session state
-# This is why we used a class for Retriever and HallucinationGate.
-# Without caching, models reload on every interaction (36s each time).
-# With caching, they load once at startup and stay in memory.
-# ──────────────────────────────────────────────
+st.set_page_config(
+    page_title="Tech News Assistant",
+    page_icon="📰",
+    layout="centered",
+)
+
 
 @st.cache_resource
 def load_retriever():
@@ -36,98 +32,166 @@ def load_logger():
     return MetricsLogger()
 
 
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+
 def query_page():
-    """Main query interface."""
-    st.title("Tech News RAG Pipeline")
-    st.caption("Ask questions about recent tech news — answers grounded in real sources")
+    st.title("📰 Tech News Assistant")
+    st.caption("Ask me anything about recent tech news. I remember our conversation.")
 
-    query = st.text_input("Your question:", placeholder="e.g. What is Microsoft doing about AI content?")
+    retriever = load_retriever()
+    gate = load_gate()
+    logger = load_logger()
 
-    if st.button("Ask", type="primary") and query:
-        retriever = load_retriever()
-        gate = load_gate()
-        logger = load_logger()
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.write(message["content"])
 
-        start_time = time.time()
+    if query := st.chat_input("Ask me about tech news..."):
 
-        # Step 1: Retrieve
-        with st.spinner("Searching articles..."):
-            chunks = retriever.retrieve(query, top_k=5)
+        with st.chat_message("user"):
+            st.write(query)
 
-        # Step 2: Generate
-        with st.spinner("Generating answer..."):
-            result = generate_answer(query, chunks)
+        st.session_state.messages.append({"role": "user", "content": query})
 
-        # Step 3: Hallucination check
-        with st.spinner("Checking faithfulness..."):
+        with st.chat_message("assistant"):
+            start_time = time.time()
+
+            # ── Step 1: Route the RAW query first ──
+            # Check for SOCIAL/AMBIGUOUS BEFORE rewriting.
+            # If we rewrite first, "hey" gets rewritten into a tech query
+            # using conversation context — totally wrong behaviour.
+            with st.spinner(""):
+                raw_routing = route_query(query, retriever)
+
+            if raw_routing.decision in ("SOCIAL", "AMBIGUOUS"):
+                response = raw_routing.user_message
+                st.write(response)
+                st.session_state.messages.append({"role": "assistant", "content": response})
+
+                latency = time.time() - start_time
+                logger.log_query(
+                    query=query,
+                    answer=response,
+                    provider="router",
+                    model="groq/llama-3.3-70b-versatile",
+                    prompt_version="routing_v1",
+                    chunks=[],
+                    evaluation={
+                        "is_faithful": False,
+                        "faithfulness_score": 0.0,
+                        "is_refusal": True,
+                        "routing_decision": raw_routing.decision,
+                        "best_distance": None,
+                    },
+                    latency_seconds=latency,
+                )
+                st.stop()
+
+            # ── Step 2: Rewrite query using conversation context ──
+            # Only runs for potentially ANSWERABLE queries — not social/ambiguous
+            with st.spinner(""):
+                rewritten_query = rewrite_query(
+                    query=query,
+                    conversation_history=st.session_state.messages[:-1],
+                )
+
+            # ── Step 3: Route the REWRITTEN query ──
+            # Now check OUT_OF_SCOPE + LOW_COVERAGE on the resolved query
+            with st.spinner(""):
+                routing = route_query(rewritten_query, retriever)
+
+            if not routing.should_proceed:
+                response = routing.user_message
+                st.write(response)
+                st.session_state.messages.append({"role": "assistant", "content": response})
+
+                latency = time.time() - start_time
+                logger.log_query(
+                    query=query,
+                    answer=response,
+                    provider="router",
+                    model="groq/llama-3.3-70b-versatile",
+                    prompt_version="routing_v1",
+                    chunks=[],
+                    evaluation={
+                        "is_faithful": False,
+                        "faithfulness_score": 0.0,
+                        "is_refusal": True,
+                        "routing_decision": routing.decision,
+                        "best_distance": routing.best_distance,
+                    },
+                    latency_seconds=latency,
+                )
+                st.stop()
+
+            # ── Step 4: Retrieve ──
+            with st.spinner("Searching articles..."):
+                chunks = retriever.retrieve(rewritten_query, top_k=5)
+
+            # ── Step 5: Generate ──
+            with st.spinner("On it..."):
+                result = generate_answer(
+                    query=rewritten_query,
+                    retrieved_chunks=chunks,
+                    conversation_history=st.session_state.messages[:-1],
+                )
+
+            # ── Step 6: Hallucination check (silent) ──
             evaluation = gate.evaluate(result["answer"], chunks)
+            evaluation["routing_decision"] = routing.decision
+            evaluation["best_distance"] = routing.best_distance
 
-        latency = time.time() - start_time
+            latency = time.time() - start_time
 
-        # Log metrics
-        logger.log_query(
-            query=query,
-            answer=result["answer"],
-            provider=result["provider"],
-            model=result["model"],
-            prompt_version=result["prompt_version"],
-            chunks=chunks,
-            evaluation=evaluation,
-            latency_seconds=latency,
-        )
+            logger.log_query(
+                query=query,
+                answer=result["answer"],
+                provider=result["provider"],
+                model=result["model"],
+                prompt_version=result["prompt_version"],
+                chunks=chunks,
+                evaluation=evaluation,
+                latency_seconds=latency,
+            )
 
-        # ── Display Answer ──
-        st.markdown("### Answer")
-        st.write(result["answer"])
+            st.write(result["answer"])
 
-        # ── Faithfulness Badge ──
-        if evaluation.get("is_refusal"):
-            st.info("LLM correctly refused — no relevant context in sources.")
-        elif evaluation["is_faithful"]:
-            st.success(f"Faithfulness: {evaluation['faithfulness_score']:.2f} — Verified")
-        else:
-            st.warning(f"Faithfulness: {evaluation['faithfulness_score']:.2f} — Low confidence")
-            if evaluation.get("flagged_sentences"):
-                with st.expander("Flagged sentences"):
-                    for s in evaluation["flagged_sentences"]:
-                        st.write(f"- ({s['entailment_score']:.2f}) {s['sentence']}")
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": result["answer"],
+            })
 
-        # ── Sentence Breakdown ──
-        if evaluation.get("sentence_scores"):
-            with st.expander("Per-sentence faithfulness breakdown"):
-                for s in evaluation["sentence_scores"]:
-                    score = s["entailment_score"]
-                    icon = "✅" if score >= 0.5 else "⚠️"
-                    st.write(f"{icon} ({score:.2f}) {s['sentence']}")
-
-        # ── Sources ──
-        with st.expander("Sources"):
-            seen = set()
-            for s in result["sources"]:
-                key = s["url"]
-                if key not in seen:
-                    seen.add(key)
-                    st.write(f"**{s['source']}**: [{s['title']}]({s['url']})")
-
-        # ── Metadata ──
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Provider", f"{result['provider']}")
-        col2.metric("Prompt Version", result["prompt_version"])
-        col3.metric("Latency", f"{latency:.1f}s")
+    with st.sidebar:
+        st.markdown("### Tech News Assistant")
+        st.caption("Powered by RAG + NLI hallucination detection")
+        st.divider()
+        if st.button("🗑️ Clear conversation", use_container_width=True):
+            st.session_state.messages = []
+            st.rerun()
+        st.divider()
+        if st.button("📊 View Dashboard", use_container_width=True):
+            st.session_state.page = "dashboard"
+            st.rerun()
 
 
 def dashboard_page():
-    """Monitoring dashboard."""
+    import pandas as pd
+
     st.title("Pipeline Monitoring Dashboard")
+
+    if st.sidebar.button("← Back to Chat", use_container_width=True):
+        st.session_state.page = "chat"
+        st.rerun()
 
     logger = load_logger()
     stats = logger.get_summary_stats()
 
     if stats["total_queries"] == 0:
-        st.info("No queries logged yet. Go to the Query page and ask some questions.")
+        st.info("No queries logged yet.")
         return
 
-    # ── Summary Metrics ──
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total Queries", stats["total_queries"])
     col2.metric("Avg Faithfulness", f"{stats['avg_faithfulness']:.2f}")
@@ -136,38 +200,25 @@ def dashboard_page():
 
     st.divider()
 
-    # ── Recent Queries Table ──
-    st.subheader("Recent Queries")
     logs = logger.get_recent_logs(20)
-
     if logs:
+        st.subheader("Recent Queries")
         df = pd.DataFrame(logs)
-        display_cols = ["timestamp", "query", "faithfulness_score", "is_faithful", "is_refusal", "provider", "prompt_version", "latency_seconds"]
+        display_cols = ["timestamp", "query", "faithfulness_score", "is_faithful", "provider", "latency_seconds"]
         available = [c for c in display_cols if c in df.columns]
-        st.dataframe(
-            df[available],
-            use_container_width=True,
-            hide_index=True,
-        )
+        st.dataframe(df[available], use_container_width=True, hide_index=True)
 
-    st.divider()
-
-    # ── Faithfulness Distribution ──
-    if logs:
+        st.divider()
         st.subheader("Faithfulness Scores")
         scores = [l["faithfulness_score"] for l in logs if l["faithfulness_score"] is not None]
         if scores:
-            chart_data = pd.DataFrame({"Faithfulness Score": scores})
-            st.bar_chart(chart_data)
+            st.bar_chart(pd.DataFrame({"Faithfulness Score": scores}))
 
 
-# ──────────────────────────────────────────────
-# Page Navigation
-# ──────────────────────────────────────────────
+if "page" not in st.session_state:
+    st.session_state.page = "chat"
 
-page = st.sidebar.radio("Navigate", ["Query", "Dashboard"])
-
-if page == "Query":
+if st.session_state.page == "chat":
     query_page()
 else:
     dashboard_page()
