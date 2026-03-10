@@ -1,18 +1,18 @@
-# 📰 Tech News RAG Pipeline with Hallucination Detection
+# Tech News RAG Pipeline
 
-A **self-evaluating RAG pipeline** that ingests real tech news, answers questions grounded in retrieved sources, and automatically detects hallucinated answers using NLI-based faithfulness scoring.
-
-Built on an 8GB RAM laptop with no GPU. Every component chosen to fit a resource constraint while maintaining engineering rigour — no notebook shortcuts.
+RAG pipeline for tech news with a hallucination detection quality gate. Ingests from RSS feeds, answers questions grounded in retrieved sources, and scores every answer for faithfulness before serving it.
 
 ---
 
-## What Makes This Different
+## What's Actually Here
 
-Most RAG tutorials stop at "retrieve chunks → generate answer." This pipeline adds three layers on top:
+**Two-stage query router** - Groq LLM classifier runs first (~0.4s) to catch off-topic and social queries before wasting a full retrieval + generation cycle (~10s). If it passes, a ChromaDB coverage probe checks whether the KB actually has relevant content. On-topic but uncovered queries get a honest "I don't have that" instead of a hallucinated answer.
 
-- **Two-stage query router** — LLM classifier catches off-topic/social queries in ~0.4s before wasting a full retrieval + generation cycle (~10s). Coverage probe then checks if the KB actually has content for on-topic queries.
-- **NLI hallucination gate** — every answer is scored for faithfulness against retrieved chunks using a local cross-encoder model. Low-confidence answers are flagged, not blindly served.
-- **Conversational memory with query rewriting** — follow-up questions like "tell me more about their funding" are rewritten into standalone queries before retrieval, so context carries across turns.
+**NLI hallucination gate** - cross-encoder scores the generated answer against retrieved chunks for faithfulness. Answers below threshold are flagged. Uses `cross-encoder/nli-deberta-v3-small` running locally - deterministic, no API cost, no quota dependency.
+
+**Conversational memory with query rewriting** - follow-ups like "tell me more about their funding" are rewritten into standalone queries using conversation history before hitting retrieval. Without this, context-dependent queries retrieve nothing useful.
+
+**Multi-provider LLM fallback** - Gemini 2.5 Flash primary, Groq Llama 3.3 70B fallback. Provider-agnostic via OpenAI-compatible SDK - switching providers is two lines.
 
 ---
 
@@ -24,7 +24,7 @@ Most RAG tutorials stop at "retrieve chunks → generate answer." This pipeline 
 ### Out-of-Scope Rejection + Hallucination Gate
 ![Out of scope and hallucination gate](docs/screenshots/out_of_scope_and_gate.png)
 
-### Conversational Follow-up + Knowledge Gap Handling
+### Conversational Follow-up
 ![Conversational memory and knowledge gap](docs/screenshots/conversational_and_gap.png)
 
 ### Monitoring Dashboard
@@ -36,96 +36,80 @@ Most RAG tutorials stop at "retrieve chunks → generate answer." This pipeline 
 
 ```
 [RSS Feeds: TechCrunch, Ars Technica, The Verge, MIT Tech Review,
-           VentureBeat, Engadget, ZDNet, The Next Web + more]
+           VentureBeat, Engadget, ZDNet, The Next Web]
     ↓
 [Ingestion: feedparser + HTML stripping + URL-hash deduplication]
     ↓
 [Recursive Chunking: 500 chars, 50 overlap]
     ↓
-[Embedding: sentence-transformers/all-MiniLM-L6-v2 (384-dim, CPU)]
+[Embedding: sentence-transformers/all-MiniLM-L6-v2 (384-dim)]
     ↓
-[ChromaDB Vector Store — HTTP container, single source of truth]
+[ChromaDB — HTTP container, single source of truth]
     ↓
 [User Query]
     ↓
-┌─────────────────────────────────────────────────┐
-│           TWO-STAGE QUERY ROUTER                │
-│                                                 │
-│  Stage 1: Groq LLM Classifier (~0.4s)          │
-│    SOCIAL    → casual response, no retrieval   │
-│    OUT_OF_SCOPE → rejection message            │
-│    AMBIGUOUS → clarification request           │
-│    ANSWERABLE → proceed to Stage 2             │
-│                                                 │
-│  Stage 2: ChromaDB Coverage Probe              │
-│    distance > 0.65 → LOW_COVERAGE response     │
-│    distance ≤ 0.65 → proceed to pipeline       │
-└─────────────────────────────────────────────────┘
-    ↓ (ANSWERABLE only)
-[Query Rewriter — rewrites follow-ups using conversation history]
+┌─────────────────────────────────────────┐
+│         TWO-STAGE QUERY ROUTER          │
+│                                         │
+│  Stage 1: Groq classifier (~0.4s)       │
+│    SOCIAL       → direct response       │
+│    OUT_OF_SCOPE → rejection             │
+│    AMBIGUOUS    → clarification         │
+│    ANSWERABLE   → Stage 2               │
+│                                         │
+│  Stage 2: ChromaDB coverage probe       │
+│    distance > 0.65 → LOW_COVERAGE       │
+│    distance ≤ 0.65 → full pipeline      │
+└─────────────────────────────────────────┘
     ↓
-[Top-5 Semantic Retrieval from ChromaDB]
+[Query Rewriter — resolves follow-up references]
     ↓
-[Versioned Prompt (YAML) + Retrieved Chunks + Conversation History]
+[Top-5 Semantic Retrieval]
     ↓
-[Google Gemini 2.5 Flash (primary) / Groq Llama 3.3 70B (fallback)]
+[Versioned Prompt (YAML) + Chunks + Conversation History]
     ↓
-[NLI Hallucination Gate: cross-encoder/nli-deberta-v3-small]
-    ├── Faithfulness ≥ 0.65 → serve answer
-    └── Faithfulness < 0.65 → flag as low-confidence
+[Gemini 2.5 Flash / Groq Llama 3.3 70B fallback]
     ↓
-[Metrics logged to SQLite → Streamlit monitoring dashboard]
+[NLI Hallucination Gate]
+    ├── score ≥ 0.65 → serve answer
+    └── score < 0.65 → flag low-confidence
+    ↓
+[SQLite metrics → Streamlit dashboard]
 ```
 
 ---
 
-## Routing in Practice
+## Routing Behaviour
 
 | Query | Stage 1 | Stage 2 | Result |
 |-------|---------|---------|--------|
-| "hey" | SOCIAL | — | Casual greeting, 0.4s |
-| "how are u" | SOCIAL | — | Bot response, 0.4s |
-| "what's the weather today" | OUT_OF_SCOPE | — | Rejection, 0.4s |
+| "hey" | SOCIAL | - | Casual response, 0.4s |
+| "how are u" | SOCIAL | - | Bot response, 0.4s |
+| "what's the weather" | OUT_OF_SCOPE | - | Rejection, 0.4s |
 | "tell me about OpenAI" | ANSWERABLE | PASS | Full answer, ~10s |
-| "OpenAI stock price" | OUT_OF_SCOPE | — | Rejection, 0.4s |
-| "did u hear about BrowseComp" | ANSWERABLE | FAIL | Low coverage response |
-| "tell me more" | AMBIGUOUS | — | Clarification request |
+| "OpenAI stock price" | OUT_OF_SCOPE | - | Rejection, 0.4s |
+| "Anthropic Opus 4.6 BrowseComp" | ANSWERABLE | FAIL | Low coverage response |
+| "tell me more" | AMBIGUOUS | - | Clarification request |
 
 ---
 
-## Tech Stack
+## Stack
 
-| Layer | Tool | Why |
-|-------|------|-----|
-| Data source | RSS feeds (10 sources) | Real, updating data |
-| Chunking | Recursive text splitter | Respects sentence boundaries |
-| Embedding | all-MiniLM-L6-v2 | 80MB, CPU-friendly, 384-dim |
-| Vector store | ChromaDB (HTTP container) | Single source of truth for local + Docker |
-| Router Stage 1 | Groq LLM classifier | Fast, cheap, catches domain mismatches |
-| Router Stage 2 | ChromaDB coverage probe | Catches on-topic but uncovered queries |
-| Query rewriter | Groq | Resolves follow-up references before retrieval |
-| LLM | Gemini 2.5 Flash + Groq Llama 3.3 70B | Both free, multi-provider fallback |
-| Hallucination gate | cross-encoder/nli-deberta-v3-small | 200MB, CPU, deterministic |
-| Prompt management | Versioned YAML (v1/v2/v3) | A/B comparison, full audit trail |
-| Monitoring | SQLite + Streamlit dashboard | Zero background memory cost |
-| CI/CD | GitHub Actions + pytest | 20 tests, runs on every push |
-| Containers | Docker + Compose | ChromaDB HTTP + app + ingest profiles |
-
----
-
-## Lightweight-First Design
-
-Entire pipeline runs on an **8GB RAM laptop with no GPU**:
-
-| Component | Memory footprint |
-|-----------|-----------------|
-| Embedding model (all-MiniLM-L6-v2) | ~80MB |
-| NLI model (nli-deberta-v3-small) | ~200MB |
-| LLM inference | 0MB (remote API) |
-| ChromaDB | ~50MB (HTTP container) |
-| Streamlit app | ~150MB |
-
-No Airflow, no Prometheus/Grafana overhead. Proves that good GenAI engineering is about architecture decisions, not infrastructure budget.
+| Layer | Tool |
+|-------|------|
+| Data | RSS feeds (8 sources) |
+| Chunking | Recursive text splitter |
+| Embedding | all-MiniLM-L6-v2 |
+| Vector store | ChromaDB (HTTP) |
+| Router Stage 1 | Groq LLM classifier |
+| Router Stage 2 | ChromaDB coverage probe |
+| Query rewriter | Groq |
+| LLM | Gemini 2.5 Flash + Groq Llama 3.3 70B |
+| Hallucination gate | cross-encoder/nli-deberta-v3-small |
+| Prompt management | Versioned YAML (v1/v2/v3) |
+| Monitoring | SQLite + Streamlit |
+| CI/CD | GitHub Actions + pytest |
+| Containers | Docker + Compose |
 
 ---
 
@@ -135,76 +119,29 @@ No Airflow, no Prometheus/Grafana overhead. Proves that good GenAI engineering i
 git clone https://github.com/vk20001/news-rag.git
 cd news-rag
 
-# API keys — both free, no credit card needed
-# Gemini: https://ai.google.dev
-# Groq: https://console.groq.com
 cp .env.example .env
-# Edit .env and add GEMINI_API_KEY and GROQ_API_KEY
+# Add GEMINI_API_KEY (ai.google.dev) and GROQ_API_KEY (console.groq.com)
+# Both free, no credit card
 
-# Start ChromaDB + app
 docker compose up -d
-
-# Ingest latest news
 docker compose --profile ingest run ingest
-
 # Open http://localhost:8501
 ```
 
----
-
-## Usage
-
 ```bash
-# Ingest fresh news
-docker compose --profile ingest run ingest
-
-# Run tests
-pytest tests/ -v
-
-# CLI query (bypasses UI)
-python run_query.py "What is Microsoft doing in AI?"
+pytest tests/ -v                          # 20 tests
+python run_query.py "Any news on OpenAI"  # CLI query
 ```
 
 ---
 
-## Project Structure
+## What I Learned
 
-```
-├── src/
-│   ├── ingestion/       # RSS fetching, deduplication (sources.py)
-│   ├── chunking/        # Recursive text splitting
-│   ├── embedding/       # MiniLM + ChromaDB writes
-│   ├── retrieval/       # Semantic search
-│   ├── routing/         # Two-stage router + routing config
-│   ├── generation/      # Multi-provider LLM + query rewriter
-│   └── evaluation/      # NLI hallucination gate
-├── prompts/             # Versioned YAML prompt templates (v1/v2/v3)
-├── tests/               # 20 unit tests
-├── data/
-│   ├── raw/             # Article JSON files
-│   ├── processed/       # Chunked articles
-│   └── vectorstore/     # ChromaDB persistence
-├── app.py               # Streamlit chat UI + dashboard
-├── docker-compose.yml   # ChromaDB + app + ingest profiles
-└── Dockerfile
-```
+**NLI on real-world text behaves differently than benchmarks suggest** - cross-encoders trained on clean NLI datasets score long, messy news chunks inconsistently. Label mappings and thresholds needed empirical calibration, not the defaults from the model card.
 
----
+**ChromaDB sync was the hardest infrastructure problem** - local ingestion writing to `data/vectorstore/` while the Docker app read from a separate volume meant two out-of-sync stores silently. Fixed by routing both through the same ChromaDB HTTP container via `CHROMA_MODE=http`.
 
-## Monitoring Dashboard
+**Query rewriting is non-negotiable for multi-turn RAG** - vague follow-ups produce bad retrieval. Rewriting "tell me more about their funding" to "What is OpenAI's latest funding situation?" before hitting ChromaDB is what makes conversation actually work.
 
-Tracks every query with: faithfulness score, latency, LLM provider used, prompt version, refusal detection. Accessible via "View Dashboard" in the sidebar.
+**Two-stage routing changes the economics** - rejecting off-topic queries at the classifier level costs ~0.4s and near-zero API tokens. Letting them fall through to full generation wastes ~10s and burns quota on answers that should never have been attempted.
 
----
-
-## What I Learned Building This
-
-**NLI models behave differently on real-world text** — cross-encoders trained on clean NLI datasets perform poorly on long, messy news chunks. Required empirical testing to find correct label mappings and calibrate the 0.65 threshold.
-
-**ChromaDB sync was the critical infrastructure problem** — local ingestion writing to `data/vectorstore/` while the Docker app read from a separate volume meant two out-of-sync vector stores. Fixed by configuring both to use the same ChromaDB HTTP container via `CHROMA_MODE=http`.
-
-**Query rewriting is non-negotiable for conversational RAG** — "tell me more about their funding" retrieves nothing useful. Rewriting it to "What is OpenAI's latest funding situation?" using conversation history makes retrieval work correctly.
-
-**Two-stage routing matters for cost and UX** — routing obvious rejections in 0.4s via LLM classifier rather than running full 10s retrieval+generation is the difference between a system that feels responsive and one that wastes API quota on weather questions.
-
----
